@@ -32,7 +32,8 @@ for k = 1:size(T,2)
     end
 end
 
-init_a = mean(imu(300:900,2:4));
+x = 1:3e4;
+init_a = mean(imu(x,2:4));
 init_a =-init_a / norm(init_a);
 
 init_psi =  0; % yaw 
@@ -44,8 +45,8 @@ init_quat = angle2quat(init_psi, init_theta, init_phi);
 % Estimate sensor bias.
 Rsw = quat2dcm(init_quat);
 as  = Rsw * [0;0;-g];
-bias_a = mean(imu(300:900,2:4)) - as';
-bias_w = mean(imu(300:900,5:7));
+bias_a = mean(imu(x,2:4)) - as';
+bias_w = mean(imu(x,5:7));
 
 % set the initial state vector
 x = zeros(10,1);
@@ -74,7 +75,7 @@ for k = 2:N
     a = imu(k,2:4); % - bias_a;
     
     % continuous state transition matrix
-    Ow = [0     -w(1)   -w(2)    -w(3);...
+    B = [0     -w(1)   -w(2)    -w(3);...
           w(1)   0       w(3)    -w(2);...
           w(2)  -w(3)    0        w(1);...
           w(3)   w(2)   -w(1)     0  ];
@@ -82,7 +83,7 @@ for k = 2:N
     
     Fc = zeros(10);
     Fc(1:3, 4:6) = eye(3);
-    Fc(4:10,7:10)= [Vq; 0.5*Ow];
+    Fc(4:10,7:10)= [Vq; 0.5*B];
     
     % continuous process covariance
     Gq = 0.5* [-quat(2)  -quat(3)   -quat(4); ...
