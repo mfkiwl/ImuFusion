@@ -1,80 +1,69 @@
-% This is an Extended Kalman Filter which fuses 
-% accelerometer & gyroscope readings
-% to get the orientation.
-% Written by @TanTanTan
-
-% Note that we assume the biases of IMU do not change in the whole
-% process. This is approximately true when the sensors operate in a steady
-% state.
-
-clear; close all; clc;
+%clear; close all; clc;
 
 %--- Dataset parameters
-deltat = 1/200;             % Sampling period
-noise_gyro = 2.4e-3;        % Gyroscope noise(discrete), rad/s
-noise_accel = 2.83e-2;      % Accelerometer noise, m/s^2
+noise_gyro = 0.88e-3;        % Gyroscope noise(discrete), rad/s
+noise_accel = 0.82e-2;      % Accelerometer noise, m/s^2
 gravity = 9.81007;          % Gravity magnitude, m/s^2
 
-%--- Load data
-% Each row of IMU data : 
-% (timestamp, wx, wy, wz, ax, ay, az)
-% Each row of Ground truth data : 
-% (time, position, quaternion, velocity, gyroscope bias, accelerometer bias)
-data = load('data/attitude_data.mat');
-imu_data = data.imu_data;   % IMU readings
-grt_data = data.grt_data;   % Ground truth (GT)
-grt_q = grt_data(:, 5:8);   % GT quaternions
-
-bias_w = grt_data(1, 12:14);    % gyroscope bias
-bias_a = grt_data(1, 15:17);    % accelerometer bias
-
+bias_w = mean(imu(300:900, 5:7))*pi/180.0;    % gyroscope bias
+bias_a = mean(imu(300:900, 2:4))*gravity;    % accelerometer bias
 
 %--- Container of the results
-N = length(imu_data);
-allX = zeros(N, 4);
+N = size(imu,1);
+allX = zeros(N, 7);
 
 
 %--- Initialization
-x = grt_q(1,:)';            % Initial state (quaternion)
-P = 1e-10 * eye(4);         % Initial covariance
+x = [1 0 0 0 bias_w(1) bias_w(2) bias_w(3)]';            % Initial state (quaternion)
+P = 1e-10 * eye(7);         % Initial covariance
+P(5,5) = (100*pi/180/3600)*(100*pi/180/3600); % 100 deg/hour
+P(6,6) = (100*pi/180/3600)*(100*pi/180/3600); % 100 deg/hour
+P(7,7) = (100*pi/180/3600)*(100*pi/180/3600); % 100 deg/hour
 allX(1,:) = x';
-
 
 % ---Here we go !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 for k = 2 : N
     
     %--- 1. Propagation --------------------------
     % Gyroscope measurements
-    w = (imu_data(k-1, 2:4) + imu_data(k, 2:4))/2;
-    w = w - bias_w;
+    dt = imu(k,1)-imu(k-1,1);
+    w = (imu(k-1, 5:7) + imu(k, 5:7))/2;
+    w = w*pi/180.0; % dps -> rad/s
+    w = w - x(5:7)';
     
     % Compute the F matrix
-    Omega =[0     -w(1)   -w(2)   -w(3);...
-            w(1)  0       w(3)    -w(2); ...
-            w(2)  -w(3)   0        w(1); ...
-            w(3)  w(2)    -w(1)    0  ];
-    F = eye(4) + deltat * Omega / 2;
-    
-    % Compute the process noise Q
-    G = [-x(2)  -x(3)  -x(4); ...
+    F = eye(7);
+    B     =[ 0     -w(1)   -w(2)   -w(3);...
+            +w(1)   0      +w(3)   -w(2); ...
+            +w(2)  -w(3)    0      +w(1); ...
+            +w(3)  +w(2)   -w(1)    0  ];
+        
+    A = [-x(2)  -x(3)  -x(4); ...
           x(1)  -x(4)   x(3); ...
           x(4)   x(1)  -x(2); ...
          -x(3)   x(2)   x(1)] / 2;
-    Q = (noise_gyro * deltat)^2 * (G * G');
+        
+    F(1:4,1:4) = eye(4) + dt * B / 2;
+    
+    F(1:4,5:7) =+dt * A /2;
+    
+    % Compute the process noise Q
+    Q = zeros(7); 
+    Q(1:4,1:4) = (noise_gyro * dt)^2 * (G * G');
     
     % Propagate the state and covariance
     x = F * x;
-    x = x / norm(x);    % Normalize the quaternion
+    x(1:4) = x(1:4) / norm(x(1:4));    % Normalize the quaternion
     P = F * P * F' + Q;
     
     
     %--- 2. Update----------------------------------
     % Accelerometer measurements
-    a = imu_data(k, 5:7);
-    a = a - bias_a;
+    a = imu(k, 2:4)*gravity;
+    %a = a - bias_a;
         
     % We use the unit vector of acceleration as observation
-    ea = a' / norm(a);
+    ea = -a' / norm(a);
     ea_prediction = [2*(x(2)*x(4)-x(1)*x(3)); ...
                      2*(x(3)*x(4)+x(1)*x(2)); ...
                      x(1)^2-x(2)^2-x(3)^2+x(4)^2];
@@ -83,9 +72,10 @@ for k = 2 : N
     y = ea - ea_prediction;
     
     % Compute the measurement matrix H
-    H = 2*[-x(3)    x(4)    -x(1)   x(2); ...
-            x(2)    x(1)     x(4)   x(3); ...
-            x(1)   -x(2)    -x(3)   x(4)];
+    H = zeros(3,7);
+    H(1:3,1:4) = 2*[-x(3)    x(4)    -x(1)   x(2); ...
+                     x(2)    x(1)     x(4)   x(3); ...
+                     x(1)   -x(2)    -x(3)   x(4)];
         
     % Measurement noise R
     R_internal = (noise_accel / norm(a))^2 * eye(3);
@@ -96,7 +86,7 @@ for k = 2 : N
     S = H * P * H' + R;
     K = P * H' / S;
     x = x + K * y;
-    P = (eye(4) - K * H) * P;
+    P = (eye(7) - K * H) * P;
     
     
     % 3. Ending
@@ -106,19 +96,7 @@ for k = 2 : N
     
 end
 
+% yaw, pitch, roll 
+[psi, theta, phi] = quat2angle(allX(:,1:4));
 
-%--- Compare the results with ground truth
-q_Ws0 = quatinv(grt_q(1,:));
-for i=1:N
-    grt_q(i,:) = quatmultiply(q_Ws0, grt_q(i,:)); 
-    allX(i,:) = quatmultiply(q_Ws0, allX(i,:));
-end
-[psi, theta, phi] = quat2angle(allX);
-[grt_psi, grt_theta, grt_phi] = quat2angle(grt_q);
-
-figure, hold on
-plot(1:N, psi,   'r-.', 1:N, grt_psi,   'r');
-plot(1:N, theta, 'g-.', 1:N, grt_theta, 'g');
-plot(1:N, phi,   'b-.', 1:N, grt_phi,   'b');
-
-    
+plot([psi, theta, phi], '-','marker','.');    
